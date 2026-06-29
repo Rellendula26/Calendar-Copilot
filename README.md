@@ -1,6 +1,6 @@
 # Calendar Copilot
 
-Calendar Copilot turns scheduling language in messages into event candidates that always require user approval before creation.
+Turn dates and times from Gmail messages into Google Calendar events after your approval.
 
 ## Stack
 
@@ -9,7 +9,23 @@ Calendar Copilot turns scheduling language in messages into event candidates tha
 - Rust background watcher (Gmail polling + local persistence)
 - Google Gmail + Google Calendar APIs
 
-## Web Development
+## What This MVP Does
+
+- Desktop shell + web UI
+- Background watcher polling Gmail
+- Rule-based scheduling extraction
+- Candidate approval queue (`Create Event`, `Edit`, `Ignore`)
+- Google Calendar creation only after explicit user action
+- Duplicate protection (source message ID + title/start-time similarity)
+
+## Prerequisites
+
+- Node.js 20+
+- Rust/Cargo + Tauri prerequisites for desktop:
+  - `xcode-select --install` on macOS
+  - [Tauri v2 setup docs](https://tauri.app/start/prerequisites/)
+
+## Run Commands
 
 1. Install dependencies:
 
@@ -17,60 +33,58 @@ Calendar Copilot turns scheduling language in messages into event candidates tha
 npm install
 ```
 
-2. Configure web env vars:
+2. Configure environment:
 
 ```bash
 cp .env.example .env.local
 ```
 
-3. Run web app:
+3. Validate quality:
+
+```bash
+npm run lint
+npm run build
+npm run validate:extraction
+```
+
+4. Start web app:
 
 ```bash
 npm run dev
 ```
 
-## Desktop Development (Tauri)
-
-Desktop runtime uses the same frontend but runs watcher/calendar actions through Tauri commands.
+5. Start desktop app:
 
 ```bash
 npm run dev:desktop
 ```
 
-## Desktop Build (macOS-first)
-
-Build desktop frontend payload + Tauri app:
+6. Build desktop app:
 
 ```bash
 npm run build:desktop
-```
-
-Build a macOS `.dmg` bundle:
-
-```bash
 npm run package:mac
 ```
 
-Note: local machine must have Rust toolchain + Tauri build prerequisites installed.
+## Environment Variables
 
-## Key Desktop Features
-
-- Background watcher toggle (On/Off)
-- Configurable Gmail polling interval
-- Status panel: connected state, last checked timestamp, detected count
-- Candidate approval queue with `Create Event`, `Edit`, and `Ignore`
-- Duplicate prevention by `sourceMessageId`
-- Local persisted watcher state, processed message IDs, candidates, created-event map
-- Secure refresh token storage via OS keychain (via Rust `keyring`)
+- `.env.example` includes runtime defaults and API-side values.
+- Desktop release/signing/updater placeholders live in `.env.desktop.example`.
+- No secrets are hardcoded.
 
 ## OAuth Scopes Used
 
 - `https://www.googleapis.com/auth/gmail.readonly`
 - `https://www.googleapis.com/auth/calendar.events`
 
-## Current Stubs
+## Integrations
 
-- Slack integration: not implemented yet
-- Discord integration: not implemented yet
+- Gmail: active
+- Slack: coming soon (stub)
+- Discord: coming soon (stub)
 
-See `INSTALLABLE_MVP.md` for full installable MVP status and remaining production steps.
+## Additional Docs
+
+- `INSTALLABLE_MVP.md` — installability status and remaining gaps
+- `DEMO_SCRIPT.md` — 60-second live demo flow
+- `RELEASE_CHECKLIST.md` — release hardening checklist

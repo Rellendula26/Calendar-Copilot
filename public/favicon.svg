@@ -1,0 +1,19 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="favBg" x1="7" y1="6" x2="58" y2="59" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#17243A"/>
+      <stop offset="1" stop-color="#0A1222"/>
+    </linearGradient>
+    <linearGradient id="favCalendar" x1="22" y1="16" x2="42" y2="47" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7FBFF"/>
+      <stop offset="1" stop-color="#DAE9FF"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="4" y="4" width="56" height="56" rx="15" fill="url(#favBg)"/>
+  <rect x="17" y="15" width="30" height="35" rx="7" fill="url(#favCalendar)"/>
+  <rect x="17" y="15" width="30" height="9" rx="7" fill="#E6F1FF"/>
+  <rect x="21" y="28" width="10" height="9" rx="2.6" fill="#1F2E47"/>
+  <rect x="33" y="28" width="10" height="9" rx="2.6" fill="#BFD6FF"/>
+  <path d="M48 16L49.8 20.2L54 22L49.8 23.8L48 28L46.2 23.8L42 22L46.2 20.2L48 16Z" fill="#57DBFF"/>
+</svg>

@@ -76,6 +76,18 @@ struct CandidateEventRecord {
     created_at: String,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreatedEventRecord {
+    id: String,
+    source_message_id: String,
+    source: String,
+    title: String,
+    start_time: String,
+    calendar_event_id: String,
+    created_at: String,
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 struct PersistedState {
@@ -86,6 +98,7 @@ struct PersistedState {
     processed_message_ids: HashSet<String>,
     candidates: Vec<CandidateEventRecord>,
     created_events: HashMap<String, String>,
+    created_event_records: Vec<CreatedEventRecord>,
     detected_count: u64,
     google: StoredGoogleConfig,
 }
@@ -99,13 +112,25 @@ struct WatcherStatus {
     last_checked: Option<String>,
     candidate_count: usize,
     detected_count: u64,
+    created_count: usize,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SetupChecklist {
+    google_connected: bool,
+    gmail_access_enabled: bool,
+    calendar_access_enabled: bool,
+    background_watcher_enabled: bool,
 }
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DesktopStateResponse {
     status: WatcherStatus,
+    setup: SetupChecklist,
     candidates: Vec<CandidateEventRecord>,
+    created_events: Vec<CreatedEventRecord>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -116,15 +141,6 @@ struct GoogleOAuthConfigInput {
     redirect_uri: String,
     refresh_token: Option<String>,
     calendar_id: Option<String>,
-}
-
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ExchangeAuthCodePayload {
-    client_id: String,
-    client_secret: String,
-    redirect_uri: String,
-    code: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -403,6 +419,23 @@ fn parse_time(body: &str) -> Option<NaiveTime> {
     NaiveTime::from_hms_opt(hour, minute, 0)
 }
 
+fn parse_time_phrase(body: &str) -> Option<NaiveTime> {
+    let lower = body.to_lowercase();
+    if lower.contains("at noon") || lower.contains(" noon") {
+        return NaiveTime::from_hms_opt(12, 0, 0);
+    }
+    if lower.contains(" in the afternoon") || lower.contains(" afternoon") {
+        return NaiveTime::from_hms_opt(15, 0, 0);
+    }
+    if lower.contains(" in the evening") || lower.contains(" evening") {
+        return NaiveTime::from_hms_opt(18, 0, 0);
+    }
+    if lower.contains(" in the morning") || lower.contains(" morning") {
+        return NaiveTime::from_hms_opt(9, 0, 0);
+    }
+    None
+}
+
 fn next_weekday(base: NaiveDate, target: Weekday) -> NaiveDate {
     let mut days = (target.num_days_from_monday() as i64 - base.weekday().num_days_from_monday() as i64) % 7;
     if days <= 0 {
@@ -438,6 +471,26 @@ fn parse_date(body: &str, received_at: DateTime<Utc>) -> Option<NaiveDate> {
         return Some(next_weekday(base, weekday));
     }
 
+    let this_day_regex =
+        Regex::new(r"\bthis\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b").ok()?;
+    if let Some(captures) = this_day_regex.captures(&lower) {
+        let weekday = match captures.get(1)?.as_str() {
+            "monday" => Weekday::Mon,
+            "tuesday" => Weekday::Tue,
+            "wednesday" => Weekday::Wed,
+            "thursday" => Weekday::Thu,
+            "friday" => Weekday::Fri,
+            "saturday" => Weekday::Sat,
+            "sunday" => Weekday::Sun,
+            _ => Weekday::Mon,
+        };
+        let candidate = next_weekday(base - chrono::Duration::days(7), weekday);
+        if candidate >= base {
+            return Some(candidate);
+        }
+        return Some(next_weekday(base, weekday));
+    }
+
     let iso_regex = Regex::new(r"\b(\d{4})-(\d{2})-(\d{2})\b").ok()?;
     if let Some(captures) = iso_regex.captures(&lower) {
         let year = captures.get(1)?.as_str().parse::<i32>().ok()?;
@@ -457,6 +510,34 @@ fn parse_date(body: &str, received_at: DateTime<Utc>) -> Option<NaiveDate> {
         return NaiveDate::from_ymd_opt(year, month, day);
     }
 
+    let month_regex = Regex::new(
+        r"\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})(?:,\s*(\d{4}))?\b",
+    )
+    .ok()?;
+    if let Some(captures) = month_regex.captures(&lower) {
+        let month = match captures.get(1)?.as_str() {
+            "january" => 1,
+            "february" => 2,
+            "march" => 3,
+            "april" => 4,
+            "may" => 5,
+            "june" => 6,
+            "july" => 7,
+            "august" => 8,
+            "september" => 9,
+            "october" => 10,
+            "november" => 11,
+            "december" => 12,
+            _ => 1,
+        };
+        let day = captures.get(2)?.as_str().parse::<u32>().ok()?;
+        let year = captures
+            .get(3)
+            .and_then(|part| part.as_str().parse::<i32>().ok())
+            .unwrap_or(base.year());
+        return NaiveDate::from_ymd_opt(year, month, day);
+    }
+
     None
 }
 
@@ -464,7 +545,7 @@ fn extract_event(message: &NormalizedMessageV2) -> Option<ExtractedEventV2> {
     let received_at = DateTime::parse_from_rfc3339(&message.received_at).ok()?.with_timezone(&Utc);
     let body = format!("{}\n{}", message.subject.clone().unwrap_or_default(), message.body);
     let date = parse_date(&body, received_at)?;
-    let start_time = parse_time(&body)?;
+    let start_time = parse_time(&body).or_else(|| parse_time_phrase(&body))?;
     let start = Utc.from_utc_datetime(&date.and_time(start_time));
     let end = start + chrono::Duration::hours(1);
 
@@ -662,6 +743,8 @@ async fn run_watcher_once_inner(app: &AppHandle, state: &AppState) -> Result<(),
         let details = fetch_message_details(&access_token, &message_id).await?;
         let normalized = parse_message(details);
         if let Some(extracted_event) = extract_event(&normalized) {
+            let extracted_title = extracted_event.title.to_lowercase();
+            let extracted_start = extracted_event.start_time.clone();
             let already_created = snapshot
                 .created_events
                 .contains_key(&extracted_event.source_message_id);
@@ -669,7 +752,14 @@ async fn run_watcher_once_inner(app: &AppHandle, state: &AppState) -> Result<(),
                 .candidates
                 .iter()
                 .any(|candidate| candidate.message.source_message_id == extracted_event.source_message_id);
-            if !already_created && !already_queued {
+            let likely_duplicate_created = snapshot.created_event_records.iter().any(|created| {
+                created.title.to_lowercase() == extracted_title && created.start_time == extracted_start
+            });
+            let likely_duplicate_queued = snapshot.candidates.iter().any(|candidate| {
+                candidate.extracted_event.title.to_lowercase() == extracted_title
+                    && candidate.extracted_event.start_time == extracted_start
+            });
+            if !already_created && !already_queued && !likely_duplicate_created && !likely_duplicate_queued {
                 new_candidates.push(CandidateEventRecord {
                     id: Uuid::new_v4().to_string(),
                     message: normalized.clone(),
@@ -705,7 +795,7 @@ async fn ensure_watcher_task(app: AppHandle, state: AppState) {
                 let guard = state.persisted.lock().await;
                 (
                     guard.watcher_enabled,
-                    guard.polling_interval_seconds.max(DEFAULT_POLL_SECONDS),
+                    guard.polling_interval_seconds.max(30),
                 )
             };
 
@@ -728,10 +818,21 @@ async fn get_desktop_state(state: State<'_, AppState>) -> Result<DesktopStateRes
         last_checked: guard.last_checked.clone(),
         candidate_count: guard.candidates.len(),
         detected_count: guard.detected_count,
+        created_count: guard.created_event_records.len(),
+    };
+    let has_google_config = !guard.google.client_id.is_empty() && !guard.google.client_secret.is_empty();
+    let has_refresh_token = get_refresh_token().is_some();
+    let setup = SetupChecklist {
+        google_connected: has_google_config && has_refresh_token,
+        gmail_access_enabled: has_google_config && has_refresh_token,
+        calendar_access_enabled: has_google_config && has_refresh_token,
+        background_watcher_enabled: guard.watcher_enabled,
     };
     Ok(DesktopStateResponse {
         status,
+        setup,
         candidates: guard.candidates.clone(),
+        created_events: guard.created_event_records.clone(),
     })
 }
 
@@ -888,6 +989,12 @@ async fn create_calendar_event_from_candidate(
         return Err("A calendar event was already created from this source message.".to_string());
     }
 
+    if snapshot.created_event_records.iter().any(|created| {
+        created.title.to_lowercase() == payload.title.to_lowercase() && created.start_time == payload.start_time
+    }) {
+        return Err("A similar calendar event was already created (same title and start time).".to_string());
+    }
+
     let mut updated_event = candidate.extracted_event.clone();
     updated_event.title = payload.title;
     updated_event.start_time = payload.start_time;
@@ -909,6 +1016,15 @@ async fn create_calendar_event_from_candidate(
     guard
         .created_events
         .insert(candidate.message.source_message_id.clone(), event_id.clone());
+    guard.created_event_records.push(CreatedEventRecord {
+        id: Uuid::new_v4().to_string(),
+        source_message_id: candidate.message.source_message_id.clone(),
+        source: candidate.message.source.clone(),
+        title: updated_event.title.clone(),
+        start_time: updated_event.start_time.clone(),
+        calendar_event_id: event_id.clone(),
+        created_at: Utc::now().to_rfc3339(),
+    });
     guard.candidates.retain(|item| item.id != payload.candidate_id);
     persist_state(&app, &guard).await?;
 
@@ -950,212 +1066,4 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Calendar Copilot desktop app");
-}
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use reqwest::Client;
-use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
-
-#[derive(Clone)]
-struct DesktopWatcher {
-  state: Arc<Mutex<WatcherRuntime>>,
-  http_client: Client,
-  endpoint: String,
-  token: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct WatcherStatus {
-  running: bool,
-  interval_seconds: u64,
-  tick_count: u64,
-  last_tick_at: Option<String>,
-  last_result: Option<String>,
-  last_error: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-struct WatcherRuntime {
-  running: bool,
-  interval_seconds: u64,
-  tick_count: u64,
-  last_tick_at: Option<String>,
-  last_result: Option<String>,
-  last_error: Option<String>,
-}
-
-impl WatcherRuntime {
-  fn new() -> Self {
-    Self {
-      running: false,
-      interval_seconds: 300,
-      tick_count: 0,
-      last_tick_at: None,
-      last_result: None,
-      last_error: None,
-    }
-  }
-
-  fn status(&self) -> WatcherStatus {
-    WatcherStatus {
-      running: self.running,
-      interval_seconds: self.interval_seconds,
-      tick_count: self.tick_count,
-      last_tick_at: self.last_tick_at.clone(),
-      last_result: self.last_result.clone(),
-      last_error: self.last_error.clone(),
-    }
-  }
-}
-
-impl DesktopWatcher {
-  fn from_env() -> Self {
-    let endpoint = std::env::var("DESKTOP_WATCHER_ENDPOINT")
-      .unwrap_or_else(|_| "http://127.0.0.1:3000/api/desktop/watcher/tick".to_string());
-    let token = std::env::var("DESKTOP_WATCHER_TOKEN").ok();
-
-    Self {
-      state: Arc::new(Mutex::new(WatcherRuntime::new())),
-      http_client: Client::new(),
-      endpoint,
-      token,
-    }
-  }
-
-  fn snapshot(&self) -> Result<WatcherStatus, String> {
-    let guard = self.state.lock().map_err(|err| err.to_string())?;
-    Ok(guard.status())
-  }
-
-  async fn tick_once(&self) -> Result<(), String> {
-    {
-      let mut guard = self.state.lock().map_err(|err| err.to_string())?;
-      guard.last_tick_at = Some(current_timestamp_string());
-    }
-
-    let mut request = self.http_client.post(self.endpoint.clone());
-    if let Some(token) = &self.token {
-      request = request.bearer_auth(token);
-    }
-
-    match request.send().await {
-      Ok(response) => {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        let mut guard = self.state.lock().map_err(|err| err.to_string())?;
-        guard.tick_count += 1;
-        guard.last_error = None;
-        guard.last_result = Some(format!("{} {}", status, body));
-        Ok(())
-      }
-      Err(error) => {
-        let mut guard = self.state.lock().map_err(|err| err.to_string())?;
-        guard.tick_count += 1;
-        guard.last_error = Some(error.to_string());
-        Err(error.to_string())
-      }
-    }
-  }
-}
-
-fn current_timestamp_string() -> String {
-  match SystemTime::now().duration_since(UNIX_EPOCH) {
-    Ok(duration) => duration.as_secs().to_string(),
-    Err(_) => "0".to_string(),
-  }
-}
-
-#[tauri::command]
-fn watcher_status(watcher: State<DesktopWatcher>) -> Result<WatcherStatus, String> {
-  watcher.snapshot()
-}
-
-#[tauri::command]
-async fn trigger_watcher_tick(watcher: State<'_, DesktopWatcher>) -> Result<WatcherStatus, String> {
-  let _ = watcher.tick_once().await;
-  watcher.snapshot()
-}
-
-#[tauri::command]
-async fn start_watcher(
-  watcher: State<'_, DesktopWatcher>,
-  app_handle: AppHandle,
-  interval_seconds: Option<u64>,
-) -> Result<WatcherStatus, String> {
-  let selected_interval = interval_seconds.unwrap_or(300).max(30);
-  let should_spawn = {
-    let mut guard = watcher.state.lock().map_err(|err| err.to_string())?;
-    guard.interval_seconds = selected_interval;
-    let already_running = guard.running;
-    guard.running = true;
-    !already_running
-  };
-
-  if should_spawn {
-    let watcher_for_task = app_handle.state::<DesktopWatcher>().inner().clone();
-    tauri::async_runtime::spawn(async move {
-      loop {
-        let running = watcher_for_task
-          .state
-          .lock()
-          .map(|guard| guard.running)
-          .unwrap_or(false);
-
-        if !running {
-          break;
-        }
-
-        let _ = watcher_for_task.tick_once().await;
-
-        let delay_seconds = watcher_for_task
-          .state
-          .lock()
-          .map(|guard| guard.interval_seconds)
-          .unwrap_or(300);
-        tauri::async_runtime::sleep(Duration::from_secs(delay_seconds)).await;
-      }
-    });
-  }
-
-  watcher.snapshot()
-}
-
-#[tauri::command]
-fn stop_watcher(watcher: State<'_, DesktopWatcher>) -> Result<WatcherStatus, String> {
-  {
-    let mut guard = watcher.state.lock().map_err(|err| err.to_string())?;
-    guard.running = false;
-  }
-  watcher.snapshot()
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-  let watcher = DesktopWatcher::from_env();
-
-  tauri::Builder::default()
-    .manage(watcher)
-    .plugin(tauri_plugin_process::init())
-    .plugin(tauri_plugin_updater::Builder::new().build())
-    .setup(|app| {
-      if cfg!(debug_assertions) {
-        app.handle().plugin(
-          tauri_plugin_log::Builder::default()
-            .level(log::LevelFilter::Info)
-            .build(),
-        )?;
-      }
-      Ok(())
-    })
-    .invoke_handler(tauri::generate_handler![
-      watcher_status,
-      trigger_watcher_tick,
-      start_watcher,
-      stop_watcher
-    ])
-    .run(tauri::generate_context!())
-    .expect("error while running tauri application");
 }

@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { NormalizedMessage } from "@/lib/domain/types";
-import { IntegrationProvider } from "@/lib/integrations/contracts";
+import { IntegrationProvider, MessageSourceIntegration } from "@/lib/integrations/contracts";
 
 const gmailWebhookSchema = z.object({
   id: z.string().min(1),
@@ -13,7 +13,10 @@ const gmailWebhookSchema = z.object({
   receivedAt: z.string().datetime().optional(),
 });
 
-export class GmailIntegration implements IntegrationProvider {
+export class GmailIntegration implements IntegrationProvider, MessageSourceIntegration {
+  key: NormalizedMessage["platform"] = "gmail";
+  label = "Gmail";
+  availability: "active" | "coming_soon" = "active";
   platform: NormalizedMessage["platform"] = "gmail";
 
   normalizeIncomingPayload(payload: unknown): NormalizedMessage {

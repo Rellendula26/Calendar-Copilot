@@ -31,6 +31,16 @@ export interface CandidateEventRecord {
   createdAt: string;
 }
 
+export interface CreatedEventRecord {
+  id: string;
+  sourceMessageId: string;
+  source: MessageSource;
+  title: string;
+  startTime: string;
+  calendarEventId: string;
+  createdAt: string;
+}
+
 export interface WatcherStatus {
   watcherEnabled: boolean;
   pollingIntervalSeconds: number;
@@ -38,6 +48,14 @@ export interface WatcherStatus {
   lastChecked: string | null;
   candidateCount: number;
   detectedCount: number;
+  createdCount: number;
+}
+
+export interface SetupChecklist {
+  googleConnected: boolean;
+  gmailAccessEnabled: boolean;
+  calendarAccessEnabled: boolean;
+  backgroundWatcherEnabled: boolean;
 }
 
 export interface GoogleOAuthConfigInput {
@@ -50,5 +68,7 @@ export interface GoogleOAuthConfigInput {
 
 export interface DesktopState {
   status: WatcherStatus;
+  setup: SetupChecklist;
   candidates: CandidateEventRecord[];
+  createdEvents: CreatedEventRecord[];
 }

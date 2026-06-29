@@ -2,42 +2,48 @@
 
 ## What Works (Implemented)
 
-- Tauri desktop shell configured as **Calendar Copilot** (`src-tauri/tauri.conf.json`)
-- Desktop/web shared UI with runtime adapter:
-  - Web mode continues to use existing Next API routes
-  - Desktop mode uses Tauri commands via `@tauri-apps/api`
-- Native-ish background watcher loop in Rust:
-  - Polls Gmail at configurable interval
-  - Tracks `lastChecked`
-  - Tracks and dedupes processed Gmail message IDs
-  - Extracts candidate events with rules (today/tomorrow/next weekday/explicit date/time parsing)
-- Normalized source message + extracted event objects (exact requested shape in TS contracts)
-- Candidate approval queue UI:
-  - `Create Event`
-  - `Edit` (title, times, timezone, location, attendees, description)
-  - `Ignore`
-- Google Calendar event creation requires explicit approval from queue action
-- Duplicate prevention:
-  - Never creates second event from same `sourceMessageId`
-  - Persists created event mapping locally
-- OAuth readiness:
-  - Save OAuth client config from UI
-  - Generate consent URL for required scopes
-  - Exchange auth code and securely persist refresh token in OS keychain
-- Local desktop persistence:
-  - watcher enabled/disabled
+- Installable Tauri shell (`src-tauri`) with macOS-first bundle configuration.
+- Next.js web app still runs unchanged for webhook/demo workflows.
+- First-run onboarding + setup checklist in dashboard:
+  - Google connected
+  - Gmail access enabled
+  - Calendar access enabled
+  - Background watcher enabled
+- Dashboard sections:
+  - Watcher Status
+  - Detected Events
+  - Created Events
+  - Settings
+- Rust background watcher with typed persisted state:
+  - watcher enabled
   - polling interval
+  - last checked timestamp
   - processed message IDs
   - candidate events
-  - created-event mapping
-  - detected count
-  - last checked timestamp
+  - created event mappings and records
+- Approval queue with explicit user actions only:
+  - Create Event
+  - Edit
+  - Ignore
+- Rule-based extraction supports:
+  - today / tomorrow / this Friday / next Monday
+  - July 15 / 7/15 / 2026-07-15
+  - 3pm / 3:30 PM / 14:00 / noon / afternoon
+- Duplicate prevention:
+  - source message ID
+  - title + start time similarity
+- OAuth readiness:
+  - consent URL generation
+  - auth code exchange
+  - refresh token storage via OS keychain (`keyring`)
+- Added extraction validation script: `npm run validate:extraction`
 
 ## What Is Stubbed
 
-- Slack integration class present but throws `"not implemented yet"`
-- Discord integration class present but throws `"not implemented yet"`
-- LLM extraction replacement is intentionally not wired yet; rules extractor is the default first implementation
+- Slack integration: stub (`coming soon`)
+- Discord integration: stub (`coming soon`)
+- Production auto-update publishing pipeline (endpoint hosting/signing)
+- End-to-end OAuth app verification with Google for public multi-user distribution
 
 ## Local Run
 
@@ -46,6 +52,9 @@
 ```bash
 npm install
 cp .env.example .env.local
+npm run lint
+npm run build
+npm run validate:extraction
 npm run dev
 ```
 
@@ -62,10 +71,10 @@ npm run build:desktop
 npm run package:mac
 ```
 
-If prerequisites are missing, install:
-- Rust + Cargo
-- Xcode command line tools
-- Tauri system dependencies
+Prerequisites:
+- Rust + Cargo (`cargo --version`)
+- Xcode command line tools (`xcode-select --install`)
+- Tauri prerequisites for v2
 
 ## Remaining Signing / Notarization
 
@@ -92,5 +101,5 @@ Not implemented yet:
 
 ## Notes
 
-- This MVP intentionally prioritizes **installable concept proof** over release hardening.
-- Existing web app behavior is preserved; desktop functionality is additive.
+- This MVP is intentionally optimized for reliability and demo readiness, not full release compliance.
+- Calendar event creation always requires user approval in the queue.

@@ -83,6 +83,7 @@ class InMemorySuggestionsStore implements SuggestionsStore {
     return (
       suggestions.find((existing) => {
         return (
+          existing.message.id === suggestion.message.id ||
           existing.message.threadId === suggestion.message.threadId ||
           (existing.extractedEvent.title.toLowerCase() ===
             suggestion.extractedEvent.title.toLowerCase() &&
@@ -146,7 +147,7 @@ class SupabaseSuggestionsStore implements SuggestionsStore {
       .select("*")
       .in("status", ["pending", "approved", "auto_approved"])
       .or(
-        `message->>threadId.eq.${suggestion.message.threadId},and(extracted_event->>title.eq.${suggestion.extractedEvent.title},extracted_event->>startIso.eq.${suggestion.extractedEvent.startIso})`,
+        `message->>id.eq.${suggestion.message.id},message->>threadId.eq.${suggestion.message.threadId},and(extracted_event->>title.eq.${suggestion.extractedEvent.title},extracted_event->>startIso.eq.${suggestion.extractedEvent.startIso})`,
       )
       .limit(1)
       .maybeSingle();

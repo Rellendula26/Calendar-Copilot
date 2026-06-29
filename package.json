@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "description": "Calendar Copilot MVP with desktop shell",
   "scripts": {
-    "dev": "next dev",
+    "dev": "WATCHPACK_POLLING=true CHOKIDAR_USEPOLLING=1 next dev --hostname 127.0.0.1 --port 3000",
+    "dev:desktop:web": "WATCHPACK_POLLING=true CHOKIDAR_USEPOLLING=1 next dev --hostname 127.0.0.1 --port 3010",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
@@ -18,7 +19,9 @@
     "desktop:release:mac": "node scripts/desktop/release.mjs mac",
     "desktop:release:windows": "node scripts/desktop/release.mjs windows",
     "desktop:release:linux": "node scripts/desktop/release.mjs linux",
-    "desktop:package:mac-pkg": "node scripts/desktop/package-macos-pkg.mjs"
+    "desktop:package:mac-pkg": "node scripts/desktop/package-macos-pkg.mjs",
+    "validate:extraction": "tsx scripts/validate-extraction.ts",
+    "icons:generate-png": "bash scripts/generate-favicon-pngs.sh"
   },
   "keywords": [],
   "author": "",
@@ -46,6 +49,7 @@
     "eslint-config-next": "^16.2.9",
     "postcss": "^8.5.16",
     "tailwindcss": "^4.3.1",
+    "tsx": "^4.20.6",
     "typescript": "^6.0.3"
   }
 }

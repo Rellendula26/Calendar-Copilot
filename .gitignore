@@ -10,3 +10,7 @@ pnpm-debug.log*
 .npm-cache
 coverage
 dist
+desktop-dist
+desktop-shell-build
+tsconfig.tsbuildinfo
+src-tauri/target

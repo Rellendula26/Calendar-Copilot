@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.calendarcopilot.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:3000",
+    "beforeDevCommand": "npm run dev:desktop:web",
+    "devUrl": "http://127.0.0.1:3010",
     "beforeBuildCommand": "npm run build:desktop:web",
     "frontendDist": "../desktop-dist"
   },
