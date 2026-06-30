@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { CandidateEventRecord, DesktopState } from "@/lib/desktop/contracts";
 import {
+  connectGoogleOAuth,
   createCalendarEventFromCandidate,
   exchangeGoogleAuthCode,
   fetchDesktopState,
@@ -81,6 +82,7 @@ export default function HomePage(): React.ReactElement {
   const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [pollingInterval, setPollingInterval] = useState("90");
   const [desktopError, setDesktopError] = useState<string | null>(null);
+  const [oauthBusy, setOauthBusy] = useState(false);
 
   const loadSuggestions = useCallback(async () => {
     setDesktopError(null);
@@ -145,6 +147,27 @@ export default function HomePage(): React.ReactElement {
   async function onGenerateAuthUrl(): Promise<void> {
     const result = await generateGoogleAuthUrl(oauthClientId, oauthRedirectUri);
     setAuthUrl(result.url);
+  }
+
+  async function onConnectGoogle(): Promise<void> {
+    setOauthBusy(true);
+    setDesktopError(null);
+    try {
+      await connectGoogleOAuth({
+        clientId: oauthClientId,
+        clientSecret: oauthClientSecret,
+        redirectUri: oauthRedirectUri,
+        refreshToken: oauthRefreshToken || undefined,
+        calendarId: "primary",
+      });
+      setOauthCode("");
+      setAuthUrl(null);
+      await loadSuggestions();
+    } catch (error) {
+      setDesktopError(error instanceof Error ? error.message : "Google connect flow failed.");
+    } finally {
+      setOauthBusy(false);
+    }
   }
 
   async function onExchangeCode(): Promise<void> {
@@ -421,6 +444,13 @@ export default function HomePage(): React.ReactElement {
                     className="rounded-lg border border-white/15 bg-slate-950 px-3 py-2 text-sm text-white"
                   />
                   <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={onConnectGoogle}
+                      disabled={oauthBusy}
+                      className="rounded-lg bg-emerald-400 px-3 py-2 text-xs font-medium text-slate-950 hover:bg-emerald-300 disabled:opacity-60"
+                    >
+                      {oauthBusy ? "Connecting..." : "Connect with Google (recommended)"}
+                    </button>
                     <button
                       onClick={onSaveOAuthConfig}
                       className="rounded-lg bg-sky-400 px-3 py-2 text-xs font-medium text-slate-950 hover:bg-sky-300"

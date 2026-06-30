@@ -12,7 +12,10 @@ use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager, State};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 use tokio::sync::Mutex;
+use url::Url;
 use uuid::Uuid;
 
 const KEYRING_SERVICE: &str = "CalendarCopilotDesktop";
@@ -308,6 +311,130 @@ async fn refresh_access_token(config: &StoredGoogleConfig, refresh_token: &str) 
         .await
         .map_err(|err| err.to_string())?;
     Ok(parsed.access_token)
+}
+
+async fn exchange_auth_code_for_tokens(
+    client_id: &str,
+    client_secret: &str,
+    redirect_uri: &str,
+    code: &str,
+) -> Result<GoogleTokenResponse, String> {
+    let client = Client::new();
+    let params = [
+        ("code", code),
+        ("client_id", client_id),
+        ("client_secret", client_secret),
+        ("redirect_uri", redirect_uri),
+        ("grant_type", "authorization_code"),
+    ];
+    let response = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&params)
+        .send()
+        .await
+        .map_err(|err| err.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("Code exchange failed ({})", response.status()));
+    }
+    response
+        .json::<GoogleTokenResponse>()
+        .await
+        .map_err(|err| err.to_string())
+}
+
+fn parse_auth_code_from_request_line(request_line: &str) -> Result<String, String> {
+    let first = request_line
+        .lines()
+        .next()
+        .ok_or("Missing request line from OAuth callback.")?;
+    let target = first
+        .split_whitespace()
+        .nth(1)
+        .ok_or("Invalid callback request target.")?;
+    let callback_url = format!("http://localhost{target}");
+    let parsed = Url::parse(&callback_url).map_err(|err| err.to_string())?;
+    let code = parsed
+        .query_pairs()
+        .find(|(key, _)| key == "code")
+        .map(|(_, value)| value.to_string())
+        .ok_or("No auth code found in OAuth callback.")?;
+    Ok(code)
+}
+
+async fn wait_for_oauth_code(redirect_uri: &str) -> Result<String, String> {
+    let parsed = Url::parse(redirect_uri).map_err(|err| err.to_string())?;
+    let host = parsed
+        .host_str()
+        .ok_or("Redirect URI must include a host.")?
+        .to_string();
+    let port = parsed
+        .port_or_known_default()
+        .ok_or("Redirect URI must include an explicit or known port.")?;
+    let expected_path = parsed.path().to_string();
+
+    let listener = TcpListener::bind((host.as_str(), port))
+        .await
+        .map_err(|err| format!("Failed to open OAuth callback listener on {host}:{port}: {err}"))?;
+    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(240), listener.accept())
+        .await
+        .map_err(|_| "Timed out waiting for Google OAuth callback.".to_string())?
+        .map_err(|err| err.to_string())?;
+
+    let mut buffer = vec![0u8; 4096];
+    let size = socket.read(&mut buffer).await.map_err(|err| err.to_string())?;
+    let request = String::from_utf8_lossy(&buffer[..size]).to_string();
+    let first_line = request.lines().next().unwrap_or_default().to_string();
+    let callback_target = first_line.split_whitespace().nth(1).unwrap_or_default().to_string();
+
+    let ok_response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<!doctype html><html><body style=\"font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; padding: 24px;\"><h2>Calendar Copilot connected</h2><p>You can close this tab and return to the app.</p></body></html>";
+    let bad_response = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\n\r\n<!doctype html><html><body style=\"font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; padding: 24px;\"><h2>Connection failed</h2><p>The callback URL was invalid. Return to Calendar Copilot and try again.</p></body></html>";
+
+    if !callback_target.starts_with(&expected_path) {
+        socket
+            .write_all(bad_response.as_bytes())
+            .await
+            .map_err(|err| err.to_string())?;
+        return Err("OAuth callback path did not match configured redirect URI.".to_string());
+    }
+
+    let code = parse_auth_code_from_request_line(&request)?;
+    socket
+        .write_all(ok_response.as_bytes())
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(code)
+}
+
+fn open_url_in_browser(url: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(url)
+            .status()
+            .map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .status()
+            .map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(url)
+            .status()
+            .map_err(|err| err.to_string())?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("Opening browser is not supported on this platform.".to_string())
 }
 
 fn extract_plain_text(payload: &Option<GmailPayload>) -> Option<String> {
@@ -889,6 +1016,53 @@ async fn save_google_oauth_config(
 }
 
 #[tauri::command]
+async fn connect_google_oauth(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    config: GoogleOAuthConfigInput,
+) -> Result<RefreshStoredResponse, String> {
+    save_google_oauth_config(app.clone(), state.clone(), config.clone()).await?;
+
+    if config.client_id.is_empty() || config.client_secret.is_empty() || config.redirect_uri.is_empty() {
+        return Err("Client ID, client secret, and redirect URI are required.".to_string());
+    }
+
+    let scope = urlencoding::encode(
+        "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.events",
+    );
+    let auth_url = format!(
+        "https://accounts.google.com/o/oauth2/v2/auth?response_type=code&client_id={}&redirect_uri={}&scope={}&access_type=offline&prompt=consent",
+        urlencoding::encode(&config.client_id),
+        urlencoding::encode(&config.redirect_uri),
+        scope
+    );
+
+    open_url_in_browser(&auth_url)?;
+    let code = wait_for_oauth_code(&config.redirect_uri).await?;
+    let token_response = exchange_auth_code_for_tokens(
+        &config.client_id,
+        &config.client_secret,
+        &config.redirect_uri,
+        &code,
+    )
+    .await?;
+
+    if let Some(token) = token_response.refresh_token.as_ref() {
+        if !token.is_empty() {
+            set_refresh_token(token)?;
+        }
+    }
+
+    let mut guard = state.persisted.lock().await;
+    guard.connected = get_refresh_token().is_some();
+    persist_state(&app, &guard).await?;
+
+    Ok(RefreshStoredResponse {
+        refresh_token_stored: get_refresh_token().is_some(),
+    })
+}
+
+#[tauri::command]
 async fn generate_google_auth_url(client_id: String, redirect_uri: String) -> Result<UrlResponse, String> {
     let scope = urlencoding::encode(
         "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.events",
@@ -911,28 +1085,7 @@ async fn exchange_google_auth_code(
     redirect_uri: String,
     code: String,
 ) -> Result<RefreshStoredResponse, String> {
-    let client = Client::new();
-    let params = [
-        ("code", code.as_str()),
-        ("client_id", client_id.as_str()),
-        ("client_secret", client_secret.as_str()),
-        ("redirect_uri", redirect_uri.as_str()),
-        ("grant_type", "authorization_code"),
-    ];
-    let response = client
-        .post("https://oauth2.googleapis.com/token")
-        .form(&params)
-        .send()
-        .await
-        .map_err(|err| err.to_string())?;
-    if !response.status().is_success() {
-        return Err(format!("Code exchange failed ({})", response.status()));
-    }
-
-    let parsed = response
-        .json::<GoogleTokenResponse>()
-        .await
-        .map_err(|err| err.to_string())?;
+    let parsed = exchange_auth_code_for_tokens(&client_id, &client_secret, &redirect_uri, &code).await?;
     if let Some(token) = parsed.refresh_token.as_ref() {
         if !token.is_empty() {
             set_refresh_token(token)?;
@@ -1059,6 +1212,7 @@ pub fn run() {
             set_polling_interval_seconds,
             run_watcher_once,
             save_google_oauth_config,
+            connect_google_oauth,
             generate_google_auth_url,
             exchange_google_auth_code,
             ignore_candidate,

@@ -34,6 +34,12 @@ export async function saveGoogleOAuthConfig(config: GoogleOAuthConfigInput): Pro
   await invoke("save_google_oauth_config", { config });
 }
 
+export async function connectGoogleOAuth(
+  config: GoogleOAuthConfigInput,
+): Promise<{ refreshTokenStored: boolean }> {
+  return invoke("connect_google_oauth", { config });
+}
+
 export async function generateGoogleAuthUrl(
   clientId: string,
   redirectUri: string,
